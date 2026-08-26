@@ -49,6 +49,7 @@ export class LocalizedCrowdPushSystem {
   private readonly initialPositions: Float32Array;
   private readonly bounds: CrowdPushAabb2;
   private readonly blockers: readonly CrowdPushAabb2[];
+  private readonly removedFlags: Uint8Array;
   private readonly spatialIndex: CrowdSpatialIndex;
   private readonly maximumDisplacement: number;
   private readonly maxNpcRadius: number;
@@ -91,8 +92,14 @@ export class LocalizedCrowdPushSystem {
     }
     this.positions = options.positions;
     this.count = options.positions.length / 3;
+    if (options.removedFlags && options.removedFlags.length !== this.count) {
+      throw new Error(
+        'LocalizedCrowdPushSystem removedFlags must contain one entry per character.',
+      );
+    }
     this.bounds = { ...options.bounds };
     this.blockers = options.blockers;
+    this.removedFlags = options.removedFlags ?? new Uint8Array(this.count);
     this.spatialIndex = options.spatialIndex;
     this.maximumDisplacement = options.spatialIndex.maximumDisplacement;
     this.initialPositions = options.positions.slice();
@@ -219,6 +226,7 @@ export class LocalizedCrowdPushSystem {
       radius + this.maxNpcRadius,
       (characterIndex) => {
         if (!available) return;
+        if (this.removedFlags[characterIndex] !== 0) return;
         const offset = characterIndex * 3;
         const deltaX = this.positions[offset] - position.x;
         const deltaZ = this.positions[offset + 2] - position.z;
@@ -338,6 +346,12 @@ export class LocalizedCrowdPushSystem {
     for (let listIndex = 0; listIndex < this.activeIndices.length; listIndex += 1) {
       const characterIndex = this.activeIndices[listIndex];
       const velocityOffset = characterIndex * 2;
+      if (this.removedFlags[characterIndex] !== 0) {
+        this.velocitiesXZ[velocityOffset] = 0;
+        this.velocitiesXZ[velocityOffset + 1] = 0;
+        this.activeFlags[characterIndex] = 0;
+        continue;
+      }
       let velocityX = this.velocitiesXZ[velocityOffset] * damping;
       let velocityZ = this.velocitiesXZ[velocityOffset + 1] * damping;
       const speed = Math.hypot(velocityX, velocityZ);
@@ -395,6 +409,7 @@ export class LocalizedCrowdPushSystem {
     playerVelocityZ: number,
     characterIndex: number,
   ): void {
+    if (this.removedFlags[characterIndex] !== 0) return;
     const positionOffset = characterIndex * 3;
     let deltaX = this.positions[positionOffset] - player.x;
     let deltaZ = this.positions[positionOffset + 2] - player.z;
@@ -448,12 +463,14 @@ export class LocalizedCrowdPushSystem {
   private solveWorkPairs(): void {
     for (let workIndex = 0; workIndex < this.workIndices.length; workIndex += 1) {
       const left = this.workIndices[workIndex];
+      if (this.removedFlags[left] !== 0) continue;
       const leftOffset = left * 3;
       this.spatialIndex.forEachNearby(
         this.positions[leftOffset],
         this.positions[leftOffset + 2],
         this.radii[left] + this.maxNpcRadius + CONTACT_SLOP,
         (right) => {
+          if (this.removedFlags[right] !== 0) return;
           if (right === left) return;
           if (right < left && this.workFlags[right] !== 0) return;
           this.solveNpcPair(left, right);
@@ -463,6 +480,7 @@ export class LocalizedCrowdPushSystem {
   }
 
   private solveNpcPair(left: number, right: number): void {
+    if (this.removedFlags[left] !== 0 || this.removedFlags[right] !== 0) return;
     const leftOffset = left * 3;
     const rightOffset = right * 3;
     let deltaX = this.positions[rightOffset] - this.positions[leftOffset];
@@ -520,6 +538,7 @@ export class LocalizedCrowdPushSystem {
       player.z,
       playerRadius + this.maxNpcRadius + CONTACT_SLOP,
       (characterIndex) => {
+        if (this.removedFlags[characterIndex] !== 0) return;
         const offset = characterIndex * 3;
         let deltaX = this.positions[offset] - player.x;
         let deltaZ = this.positions[offset + 2] - player.z;
@@ -552,6 +571,7 @@ export class LocalizedCrowdPushSystem {
 
   private constrainMovedNpcsToWorld(): void {
     for (const characterIndex of this.movedIndices) {
+      if (this.removedFlags[characterIndex] !== 0) continue;
       const offset = characterIndex * 3;
       this.scratchNpcPoint.x = this.positions[offset];
       this.scratchNpcPoint.z = this.positions[offset + 2];
@@ -564,6 +584,7 @@ export class LocalizedCrowdPushSystem {
   }
 
   private clampNpcToAnchor(characterIndex: number): void {
+    if (this.removedFlags[characterIndex] !== 0) return;
     const offset = characterIndex * 3;
     const deltaX = this.positions[offset] - this.initialPositions[offset];
     const deltaZ = this.positions[offset + 2] - this.initialPositions[offset + 2];
@@ -575,6 +596,7 @@ export class LocalizedCrowdPushSystem {
   }
 
   private markMoved(characterIndex: number): void {
+    if (this.removedFlags[characterIndex] !== 0) return;
     if (this.movedFlags[characterIndex] === 0) {
       this.movedFlags[characterIndex] = 1;
       this.movedIndices.push(characterIndex);
@@ -586,12 +608,20 @@ export class LocalizedCrowdPushSystem {
   }
 
   private markWork(characterIndex: number): void {
+    if (this.removedFlags[characterIndex] !== 0) return;
     if (this.workFlags[characterIndex] !== 0) return;
     this.workFlags[characterIndex] = 1;
     this.workIndices.push(characterIndex);
   }
 
   private markActive(characterIndex: number): void {
+    if (this.removedFlags[characterIndex] !== 0) {
+      const offset = characterIndex * 2;
+      this.velocitiesXZ[offset] = 0;
+      this.velocitiesXZ[offset + 1] = 0;
+      this.activeFlags[characterIndex] = 0;
+      return;
+    }
     if (this.activeFlags[characterIndex] !== 0) return;
     this.activeFlags[characterIndex] = 1;
     this.activeIndices.push(characterIndex);
@@ -599,6 +629,11 @@ export class LocalizedCrowdPushSystem {
 
   private limitNpcVelocity(characterIndex: number): void {
     const offset = characterIndex * 2;
+    if (this.removedFlags[characterIndex] !== 0) {
+      this.velocitiesXZ[offset] = 0;
+      this.velocitiesXZ[offset + 1] = 0;
+      return;
+    }
     const velocityX = this.velocitiesXZ[offset];
     const velocityZ = this.velocitiesXZ[offset + 1];
     const speed = Math.hypot(velocityX, velocityZ);

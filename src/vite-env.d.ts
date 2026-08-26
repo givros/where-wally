@@ -15,13 +15,14 @@ interface ThreeCrowdCharacterTestLocation {
   y: number;
   z: number;
   radius: number;
+  removed: boolean;
 }
 
 interface ThreeGameTestHooks {
   start(): void;
   findWally(): ThreeGameTestLocation;
   identifyReticle(): void;
-  triggerIdentify(target?: 'wally' | 'wrong'): void;
+  triggerIdentify(target?: 'wally' | 'wrong', characterIndex?: number): void;
   restart(): void;
   togglePause(): void;
   setupCrowdPush(): ThreeCrowdCharacterTestLocation;
@@ -39,6 +40,8 @@ interface ThreeGameDiagnostics {
     wrongGuesses: number;
     penaltySeconds: number;
     crowdCount: number;
+    remainingCrowdCount: number;
+    removedCrowdCount: number;
     requestedCrowdCount: number;
     densityLabel: string;
     seed: number;

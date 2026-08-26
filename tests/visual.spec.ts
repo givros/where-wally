@@ -73,10 +73,10 @@ async function attachScreenshot(page: Page, testInfo: TestInfo, name: string): P
   await testInfo.attach(name, { body: screenshot, contentType: 'image/png' });
 }
 
-test('10,000-person CharacterBase search supports movement, penalty, pause, find, and restart', async ({ page }, testInfo) => {
+test('1,000,000-person CharacterBase search supports movement, removal, pause, find, and restart', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== 'desktop-chrome', 'Desktop gameplay coverage.');
   const errors = captureErrors(page);
-  await page.goto('/?crowd=10000&seed=7331');
+  await page.goto('/?seed=7331');
   await expect(page.locator('#game-canvas')).toBeVisible();
   await waitForReady(page);
   await expect(page.locator('#target-dossier')).toBeVisible();
@@ -91,20 +91,20 @@ test('10,000-person CharacterBase search supports movement, penalty, pause, find
     source: 'blender-characterbase',
     oneCanonicalBase: true,
     fullGeometryOnly: true,
-    completeCharacterBaseCharacters: 10_000,
+    completeCharacterBaseCharacters: 1_000_000,
     simplifiedCharacters: 0,
     assetLoaded: true,
     activeHighCharacters: 512,
     activeMediumCharacters: 0,
     activeLowCharacters: 0,
-    stripedCharacters: 10_000,
-    collidableCharacters: 10_000,
-    pushableCharacters: 10_000,
+    stripedCharacters: 1_000_000,
+    collidableCharacters: 1_000_000,
+    pushableCharacters: 1_000_000,
     wallyLikeCharacters: 0,
     exactWallyOutfits: 0,
-    outfitVariants: 10_000,
-    uniqueOutfitSignatures: 10_000,
-    perceptuallyUniqueOutfits: 10_000,
+    outfitVariants: 1_000_000,
+    uniqueOutfitSignatures: 1_000_000,
+    perceptuallyUniqueOutfits: 1_000_000,
     visibleExtraElements: 0,
     renderMode: 'pooled-visible-complete-characterbase-high',
     activeInstancedMeshes: 3,
@@ -112,7 +112,7 @@ test('10,000-person CharacterBase search supports movement, penalty, pause, find
     drawCallEstimate: 3,
     renderPoolCapacity: 512,
     visibleCharacters: 512,
-    culledCharacters: 9_488,
+    culledCharacters: 999_488,
     renderPartInstances: 1_536,
     approximateTriangles: 2_878_464,
   });
@@ -124,8 +124,12 @@ test('10,000-person CharacterBase search supports movement, penalty, pause, find
   expect(initialSample, JSON.stringify(initialSample)).toMatchObject({ ok: true });
   await page.locator('#start-button').click();
   await expect.poll(() => page.evaluate(() => window.__THREE_GAME_DIAGNOSTICS__?.state)).toBe('playing');
+  const initialRemainingCrowd = await page.evaluate(
+    () => window.__THREE_GAME_DIAGNOSTICS__!.game.remainingCrowdCount,
+  );
 
   const pushTarget = await page.evaluate(() => window.__THREE_GAME_TEST_HOOKS__!.setupCrowdPush());
+  expect(pushTarget.removed).toBe(false);
   await expect
     .poll(() => page.evaluate(() => window.__THREE_GAME_DIAGNOSTICS__?.aimAura))
     .toMatchObject({
@@ -156,9 +160,30 @@ test('10,000-person CharacterBase search supports movement, penalty, pause, find
   );
   expect(Math.hypot(pushedTarget.x - pushTarget.x, pushedTarget.z - pushTarget.z)).toBeGreaterThan(0.05);
 
-  await page.evaluate(() => window.__THREE_GAME_TEST_HOOKS__!.triggerIdentify('wrong'));
+  await page.evaluate(
+    (characterIndex) =>
+      window.__THREE_GAME_TEST_HOOKS__!.triggerIdentify('wrong', characterIndex),
+    pushTarget.characterIndex,
+  );
   await expect.poll(() => page.evaluate(() => window.__THREE_GAME_DIAGNOSTICS__?.game.wrongGuesses)).toBe(1);
+  await expect
+    .poll(() => page.evaluate(
+      (characterIndex) =>
+        window.__THREE_GAME_TEST_HOOKS__!.readCrowdCharacter(characterIndex).removed,
+      pushTarget.characterIndex,
+    ))
+    .toBe(true);
+  await expect
+    .poll(() => page.evaluate(() => window.__THREE_GAME_DIAGNOSTICS__?.game.remainingCrowdCount))
+    .toBe(initialRemainingCrowd - 1);
+  await expect
+    .poll(() => page.evaluate(() => window.__THREE_GAME_DIAGNOSTICS__?.crowd.removedCharacters))
+    .toBe(1);
+  await expect
+    .poll(() => page.evaluate(() => window.__THREE_GAME_DIAGNOSTICS__?.aimAura.crowdIndex))
+    .not.toBe(pushTarget.characterIndex);
   expect(await page.locator('#penalty-value').textContent()).toContain('+5s');
+  await expect(page.locator('#feedback-banner')).not.toHaveClass(/is-visible/);
 
   await page.keyboard.press('KeyP');
   await expect.poll(() => page.evaluate(() => window.__THREE_GAME_DIAGNOSTICS__?.state)).toBe('paused');
@@ -194,13 +219,24 @@ test('10,000-person CharacterBase search supports movement, penalty, pause, find
     .poll(() => page.evaluate(() => window.__THREE_GAME_DIAGNOSTICS__?.aimAura.visible))
     .toBe(false);
   await expect(page.locator('#success-overlay')).toBeVisible();
-  await attachScreenshot(page, testInfo, '10000-person-success.png');
+  await attachScreenshot(page, testInfo, 'million-person-success.png');
 
   await page.keyboard.press('KeyR');
   await expect.poll(() => page.evaluate(() => window.__THREE_GAME_DIAGNOSTICS__?.state)).toBe('playing');
   const secondSpot = await page.evaluate(() => window.__THREE_GAME_DIAGNOSTICS__!.wally.position);
   expect(Math.hypot(secondSpot.x - firstSpot.x, secondSpot.z - firstSpot.z)).toBeGreaterThan(1);
   expect(await page.evaluate(() => window.__THREE_GAME_DIAGNOSTICS__!.game.wrongGuesses)).toBe(0);
+  expect(await page.evaluate(
+    (characterIndex) =>
+      window.__THREE_GAME_TEST_HOOKS__!.readCrowdCharacter(characterIndex).removed,
+    pushTarget.characterIndex,
+  )).toBe(false);
+  expect(await page.evaluate(
+    () => window.__THREE_GAME_DIAGNOSTICS__!.game.remainingCrowdCount,
+  )).toBe(initialRemainingCrowd);
+  expect(await page.evaluate(
+    () => window.__THREE_GAME_DIAGNOSTICS__!.crowd.removedCharacters,
+  )).toBe(0);
   expect(Number(await page.evaluate(() => window.__THREE_GAME_DIAGNOSTICS__!.crowd.pushEvents))).toBe(0);
   const restartedWardrobe = await page.evaluate(() => ({
     hash: String(window.__THREE_GAME_DIAGNOSTICS__!.crowd.outfitSignatureHash),
@@ -208,21 +244,21 @@ test('10,000-person CharacterBase search supports movement, penalty, pause, find
     exactWally: Number(window.__THREE_GAME_DIAGNOSTICS__!.crowd.exactWallyOutfits),
   }));
   expect(restartedWardrobe.hash).not.toBe(initialOutfitHash);
-  expect(restartedWardrobe.unique).toBe(10_000);
+  expect(restartedWardrobe.unique).toBe(1_000_000);
   expect(restartedWardrobe.exactWally).toBe(0);
 
   expect(errors.consoleErrors).toEqual([]);
   expect(errors.pageErrors).toEqual([]);
 });
 
-test('10,000-person search fits mobile portrait and completes with touch UI', async ({ page }, testInfo) => {
+test('1,000,000-person search fits mobile portrait and completes with touch UI', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== 'mobile-chrome', 'Mobile responsive coverage.');
   const errors = captureErrors(page);
-  await page.goto('/?crowd=10000&seed=7331');
+  await page.goto('/?seed=7331');
   await waitForReady(page);
 
   await expect(page.locator('#crowd-cluster')).toBeVisible();
-  await expect(page.locator('#crowd-value')).toHaveText('10,000');
+  await expect(page.locator('#crowd-value')).toHaveText('1,000,000');
   await expect(page.locator('#target-dossier')).toBeVisible();
   const responsive = await page.evaluate(() => ({
     touchMode: window.__THREE_GAME_DIAGNOSTICS__!.input.mode,
@@ -235,18 +271,18 @@ test('10,000-person search fits mobile portrait and completes with touch UI', as
   expect(responsive.canvasWidth).toBe(responsive.viewportWidth);
 
   const diagnostics = await page.evaluate(() => window.__THREE_GAME_DIAGNOSTICS__!);
-  expect(diagnostics.game.crowdCount).toBe(10_000);
+  expect(diagnostics.game.crowdCount).toBe(1_000_000);
   expect(diagnostics.crowd).toMatchObject({
     source: 'blender-characterbase',
     oneCanonicalBase: true,
     fullGeometryOnly: true,
-    completeCharacterBaseCharacters: 10_000,
+    completeCharacterBaseCharacters: 1_000_000,
     simplifiedCharacters: 0,
-    collidableCharacters: 10_000,
-    pushableCharacters: 10_000,
-    outfitVariants: 10_000,
-    uniqueOutfitSignatures: 10_000,
-    perceptuallyUniqueOutfits: 10_000,
+    collidableCharacters: 1_000_000,
+    pushableCharacters: 1_000_000,
+    outfitVariants: 1_000_000,
+    uniqueOutfitSignatures: 1_000_000,
+    perceptuallyUniqueOutfits: 1_000_000,
     exactWallyOutfits: 0,
     renderMode: 'pooled-visible-complete-characterbase-high',
     renderPoolCapacity: 256,
@@ -269,7 +305,7 @@ test('10,000-person search fits mobile portrait and completes with touch UI', as
   await expect
     .poll(() => page.evaluate(() => window.__THREE_GAME_DIAGNOSTICS__?.aimAura.targetKind))
     .toBe('wally');
-  await attachScreenshot(page, testInfo, '10000-person-mobile-target.png');
+  await attachScreenshot(page, testInfo, 'million-person-mobile-target.png');
   await page.locator('#identify-touch').click();
   await expect.poll(() => page.evaluate(() => window.__THREE_GAME_DIAGNOSTICS__?.state)).toBe('won');
   await expect(page.locator('#success-overlay')).toBeVisible();

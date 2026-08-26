@@ -120,12 +120,15 @@ export class CrowdSystem {
     pantsColor: PANTS_PALETTE[0],
   };
   private readonly skinIndices: Uint8Array;
+  private readonly removedFlags: Uint8Array;
+  private readonly removedIndices: number[] = [];
   private readonly instanceBindings: InstanceBinding[][] | null;
   private readonly directBindings: THREE.Mesh[][] | null;
   private readonly poolSlotByCharacter: Int32Array;
   private readonly spatialIndex: CrowdSpatialIndex;
   private readonly visibilityCandidates: number[] = [];
   private readonly transformDummy = new THREE.Object3D();
+  private readonly hiddenMatrix = new THREE.Matrix4().makeScale(0, 0, 0);
   private readonly dirtyMeshes = new Set<THREE.InstancedMesh>();
   private readonly maxVisibleCharacters: number;
   private pooledCharacterBySlot = new Int32Array(0);
@@ -138,6 +141,7 @@ export class CrowdSystem {
     const { count, bounds, blockers, seed, reservedZones } = options;
     this.scene = scene;
     this.count = Math.max(0, Math.floor(Number.isFinite(count) ? count : 0));
+    this.removedFlags = new Uint8Array(this.count);
     this.maxVisibleCharacters = Math.min(
       this.count,
       Math.max(
@@ -196,6 +200,8 @@ export class CrowdSystem {
 
     this.diagnostics = {
       characters: this.count,
+      remainingCharacters: this.count,
+      removedCharacters: 0,
       characterPositionBytes: this.positions.byteLength,
       source: 'blender-characterbase',
       sourceModel: CHARACTER_CROWD_MODEL_URL,
@@ -334,7 +340,10 @@ export class CrowdSystem {
     this.dirtyMeshes.clear();
     const syncCharacter = (characterIndex: number) => {
       if (characterIndex < 0 || characterIndex >= this.count) return;
-      const matrix = this.getCharacterMatrix(characterIndex, this.transformDummy);
+      const removed = this.removedFlags[characterIndex] !== 0;
+      const matrix = removed
+        ? this.hiddenMatrix
+        : this.getCharacterMatrix(characterIndex, this.transformDummy);
       for (const binding of this.instanceBindings?.[characterIndex] ?? []) {
         binding.mesh.setMatrixAt(binding.instanceIndex, matrix);
         this.dirtyMeshes.add(binding.mesh);
@@ -347,6 +356,8 @@ export class CrowdSystem {
         }
       }
       for (const mesh of this.directBindings?.[characterIndex] ?? []) {
+        mesh.visible = !removed;
+        if (removed) continue;
         mesh.matrix.copy(matrix);
         mesh.matrixWorldNeedsUpdate = true;
       }
@@ -378,6 +389,62 @@ export class CrowdSystem {
     return this.spatialIndex;
   }
 
+  /** Shared tombstones consumed by rendering, picking, and crowd physics. */
+  getRemovedFlags(): Uint8Array {
+    return this.removedFlags;
+  }
+
+  getRemainingCount(): number {
+    return this.count - this.removedIndices.length;
+  }
+
+  isCharacterRemoved(characterIndex: number): boolean {
+    return characterIndex >= 0 &&
+      characterIndex < this.count &&
+      this.removedFlags[characterIndex] !== 0;
+  }
+
+  /** Removes one wrong suspect for the rest of the current search round. */
+  removeCharacter(characterIndex: number): boolean {
+    if (
+      !Number.isInteger(characterIndex) ||
+      characterIndex < 0 ||
+      characterIndex >= this.count ||
+      this.removedFlags[characterIndex] !== 0
+    ) {
+      return false;
+    }
+
+    this.removedFlags[characterIndex] = 1;
+    this.removedIndices.push(characterIndex);
+    for (const mesh of this.directBindings?.[characterIndex] ?? []) mesh.visible = false;
+    for (const binding of this.instanceBindings?.[characterIndex] ?? []) {
+      binding.mesh.setMatrixAt(binding.instanceIndex, this.hiddenMatrix);
+      binding.mesh.instanceMatrix.needsUpdate = true;
+    }
+    if (this.pooledLayers.length > 0) {
+      this.updatePooledVisibility(this.lastLodViewer, true);
+    }
+    this.refreshRemovalDiagnostics();
+    this.refreshRenderDiagnostics();
+    return true;
+  }
+
+  /** Restores only suspects removed during this round, preserving stable IDs. */
+  restoreRemovedCharacters(): void {
+    if (this.removedIndices.length === 0) return;
+    const restoredIndices = this.removedIndices.slice();
+    for (const characterIndex of restoredIndices) this.removedFlags[characterIndex] = 0;
+    this.removedIndices.length = 0;
+    if (this.pooledLayers.length > 0) {
+      this.updatePooledVisibility(this.lastLodViewer, true);
+    } else {
+      this.syncTransforms(restoredIndices);
+    }
+    this.refreshRemovalDiagnostics();
+    this.refreshRenderDiagnostics();
+  }
+
   getVisibleCharacters(): VisibleCrowdCharacters | null {
     if (this.pooledLayers.length === 0) return null;
     return {
@@ -387,13 +454,21 @@ export class CrowdSystem {
   }
 
   copyCharacterMatrix(characterIndex: number, target: THREE.Matrix4): boolean {
-    if (characterIndex < 0 || characterIndex >= this.count) return false;
+    if (
+      characterIndex < 0 ||
+      characterIndex >= this.count ||
+      this.removedFlags[characterIndex] !== 0
+    ) return false;
     target.copy(this.getCharacterMatrix(characterIndex, this.transformDummy));
     return true;
   }
 
   isCharacterVisible(characterIndex: number): boolean {
-    if (characterIndex < 0 || characterIndex >= this.count) return false;
+    if (
+      characterIndex < 0 ||
+      characterIndex >= this.count ||
+      this.removedFlags[characterIndex] !== 0
+    ) return false;
     return this.pooledLayers.length === 0 || this.poolSlotByCharacter[characterIndex] >= 0;
   }
 
@@ -476,7 +551,9 @@ export class CrowdSystem {
     const dummy = new THREE.Object3D();
 
     for (let characterIndex = 0; characterIndex < this.count; characterIndex += 1) {
-      const matrix = this.getCharacterMatrix(characterIndex, dummy).clone();
+      const matrix = this.removedFlags[characterIndex] !== 0
+        ? this.hiddenMatrix
+        : this.getCharacterMatrix(characterIndex, dummy).clone();
       const outfit = createWallyAdjacentOutfit(characterIndex, this.outfitSeed);
       for (const part of CHARACTER_PARTS) {
         const materialKey = part === 'body'
@@ -501,6 +578,7 @@ export class CrowdSystem {
         mesh.name = `crowd-striped-${characterIndex}-${part}`;
         mesh.matrix.copy(matrix);
         mesh.matrixAutoUpdate = false;
+        mesh.visible = this.removedFlags[characterIndex] === 0;
         mesh.castShadow = true;
         mesh.receiveShadow = true;
         mesh.raycast = () => undefined;
@@ -590,7 +668,9 @@ export class CrowdSystem {
     const trouserColor = new THREE.Color();
 
     indices.forEach((characterIndex, instanceIndex) => {
-      const matrix = this.getCharacterMatrix(characterIndex, dummy);
+      const matrix = this.removedFlags[characterIndex] !== 0
+        ? this.hiddenMatrix
+        : this.getCharacterMatrix(characterIndex, dummy);
       for (const layer of layers) {
         layer.mesh.setMatrixAt(instanceIndex, matrix);
         this.instanceBindings?.[characterIndex]?.push({ mesh: layer.mesh, instanceIndex });
@@ -659,6 +739,7 @@ export class CrowdSystem {
       queryRadius,
       this.visibilityCandidates,
     );
+    this.filterRemovedVisibilityCandidates();
     while (
       this.visibilityCandidates.length < this.maxVisibleCharacters &&
       queryRadius < 72
@@ -670,6 +751,7 @@ export class CrowdSystem {
         queryRadius,
         this.visibilityCandidates,
       );
+      this.filterRemovedVisibilityCandidates();
     }
     const ordered = this.visibilityCandidates;
     ordered.sort((left, right) => {
@@ -702,7 +784,7 @@ export class CrowdSystem {
     this.diagnostics.activeMediumCharacters = 0;
     this.diagnostics.activeLowCharacters = 0;
     this.diagnostics.visibleCharacters = visibleCharacters;
-    this.diagnostics.culledCharacters = this.count - visibleCharacters;
+    this.diagnostics.culledCharacters = this.getRemainingCount() - visibleCharacters;
     this.diagnostics.visibleChunks = visibleCharacters > 0 ? 1 : 0;
     this.diagnostics.culledChunks = 0;
     this.diagnostics.farthestRenderedCharacter = farthestDistance;
@@ -750,7 +832,8 @@ export class CrowdSystem {
 
   private refreshRenderDiagnostics(): void {
     const activeLayers = this.layers.filter((layer) => layer.mesh.visible && layer.mesh.count > 0);
-    const directTriangles = this.directMeshes.reduce(
+    const activeDirectMeshes = this.directMeshes.filter((mesh) => mesh.visible);
+    const directTriangles = activeDirectMeshes.reduce(
       (sum, mesh) => sum + getTriangleCount(mesh.geometry),
       0,
     );
@@ -760,13 +843,32 @@ export class CrowdSystem {
     );
     this.diagnostics.renderPartInstances = activeLayers.reduce(
       (sum, layer) => sum + layer.mesh.count,
-      this.directMeshes.length,
+      activeDirectMeshes.length,
     );
     this.diagnostics.approximateTriangles = approximateTriangles;
-    this.diagnostics.drawCallEstimate = activeLayers.length + this.directMeshes.length;
+    this.diagnostics.drawCallEstimate = activeLayers.length + activeDirectMeshes.length;
     this.diagnostics.instancedMeshes = this.layers.length;
     this.diagnostics.activeInstancedMeshes = activeLayers.length;
     this.diagnostics.animatedLayers = activeLayers.length;
+  }
+
+  private filterRemovedVisibilityCandidates(): void {
+    let writeIndex = 0;
+    for (let readIndex = 0; readIndex < this.visibilityCandidates.length; readIndex += 1) {
+      const characterIndex = this.visibilityCandidates[readIndex];
+      if (this.removedFlags[characterIndex] !== 0) continue;
+      this.visibilityCandidates[writeIndex] = characterIndex;
+      writeIndex += 1;
+    }
+    this.visibilityCandidates.length = writeIndex;
+  }
+
+  private refreshRemovalDiagnostics(): void {
+    const remaining = this.getRemainingCount();
+    this.diagnostics.remainingCharacters = remaining;
+    this.diagnostics.removedCharacters = this.removedIndices.length;
+    this.diagnostics.collidableCharacters = remaining;
+    this.diagnostics.pushableCharacters = remaining;
   }
 
   private getCharacterMatrix(index: number, dummy: THREE.Object3D): THREE.Matrix4 {

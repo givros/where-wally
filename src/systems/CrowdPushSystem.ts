@@ -24,6 +24,8 @@ export type CrowdPushSystemOptions = {
   positions: Float32Array;
   /** One collision radius per character. Defaults to `defaultRadius`. */
   radii?: Float32Array;
+  /** Shared removal mask. Non-zero characters do not participate in physics. */
+  removedFlags?: Uint8Array;
   bounds: CrowdPushAabb2;
   blockers: readonly CrowdPushAabb2[];
   defaultRadius?: number;
@@ -89,6 +91,7 @@ export class CrowdPushSystem {
   private readonly initialPositions: Float32Array;
   private readonly bounds: CrowdPushAabb2;
   private readonly blockers: readonly CrowdPushAabb2[];
+  private readonly removedFlags: Uint8Array;
   private readonly gridHeads: Int32Array;
   private readonly gridNext: Int32Array;
   private readonly movedFlags: Uint8Array;
@@ -129,8 +132,12 @@ export class CrowdPushSystem {
 
     this.positions = options.positions;
     this.count = options.positions.length / 3;
+    if (options.removedFlags && options.removedFlags.length !== this.count) {
+      throw new Error('CrowdPushSystem removedFlags must contain one entry per character.');
+    }
     this.bounds = options.bounds;
     this.blockers = options.blockers;
+    this.removedFlags = options.removedFlags ?? new Uint8Array(this.count);
     this.initialPositions = options.positions.slice();
     this.velocitiesXZ = new Float32Array(this.count * 2);
     this.radii = new Float32Array(this.count);
@@ -291,6 +298,7 @@ export class CrowdPushSystem {
     if (this.discOverlapsAnyBlocker(x, z, radius)) return false;
 
     for (let index = 0; index < this.count; index += 1) {
+      if (this.removedFlags[index] !== 0) continue;
       const offset = index * 3;
       const dx = this.positions[offset] - x;
       const dz = this.positions[offset + 2] - z;
@@ -334,6 +342,7 @@ export class CrowdPushSystem {
     let playerOverlapCount = 0;
 
     for (let left = 0; left < this.count; left += 1) {
+      if (this.removedFlags[left] !== 0) continue;
       const leftOffset = left * 3;
       const leftX = this.positions[leftOffset];
       const leftZ = this.positions[leftOffset + 2];
@@ -353,6 +362,7 @@ export class CrowdPushSystem {
 
     this.rebuildGrid();
     for (let left = 0; left < this.count; left += 1) {
+      if (this.removedFlags[left] !== 0) continue;
       const leftOffset = left * 3;
       const leftX = this.positions[leftOffset];
       const leftZ = this.positions[leftOffset + 2];
@@ -366,7 +376,7 @@ export class CrowdPushSystem {
           if (neighborX < 0 || neighborX >= this.gridColumns) continue;
           let right = this.gridHeads[neighborZ * this.gridColumns + neighborX];
           while (right >= 0) {
-            if (right > left) {
+            if (right > left && this.removedFlags[right] === 0) {
               const rightOffset = right * 3;
               const dx = this.positions[rightOffset] - leftX;
               const dz = this.positions[rightOffset + 2] - leftZ;
@@ -416,11 +426,15 @@ export class CrowdPushSystem {
   }
 
   private integrateNpcVelocities(deltaSeconds: number): void {
-    if (deltaSeconds <= 0) return;
     const damping = Math.exp(-NPC_DAMPING * deltaSeconds);
     let activeVelocityCount = 0;
     for (let index = 0; index < this.count; index += 1) {
       const velocityOffset = index * 2;
+      if (this.removedFlags[index] !== 0) {
+        this.velocitiesXZ[velocityOffset] = 0;
+        this.velocitiesXZ[velocityOffset + 1] = 0;
+        continue;
+      }
       let velocityX = this.velocitiesXZ[velocityOffset] * damping;
       let velocityZ = this.velocitiesXZ[velocityOffset + 1] * damping;
       const speed = Math.hypot(velocityX, velocityZ);
@@ -446,6 +460,7 @@ export class CrowdPushSystem {
 
   private constrainMovedNpcsToWorld(): void {
     for (let index = 0; index < this.count; index += 1) {
+      if (this.removedFlags[index] !== 0) continue;
       if (this.movedFlags[index] === 0) continue;
       const offset = index * 3;
       const beforeX = this.positions[offset];
@@ -464,6 +479,8 @@ export class CrowdPushSystem {
   private rebuildGrid(): void {
     this.gridHeads.fill(-1);
     for (let index = 0; index < this.count; index += 1) {
+      this.gridNext[index] = -1;
+      if (this.removedFlags[index] !== 0) continue;
       const offset = index * 3;
       const cell = this.getGridCell(this.positions[offset], this.positions[offset + 2]);
       this.gridNext[index] = this.gridHeads[cell];
@@ -473,6 +490,7 @@ export class CrowdPushSystem {
 
   private solveNpcPairs(): void {
     for (let left = 0; left < this.count; left += 1) {
+      if (this.removedFlags[left] !== 0) continue;
       if (this.movedFlags[left] === 0) continue;
       const leftOffset = left * 3;
       const leftX = this.positions[leftOffset];
@@ -502,6 +520,7 @@ export class CrowdPushSystem {
   }
 
   private solveNpcPair(left: number, right: number): void {
+    if (this.removedFlags[left] !== 0 || this.removedFlags[right] !== 0) return;
     const leftOffset = left * 3;
     const rightOffset = right * 3;
     let dx = this.positions[rightOffset] - this.positions[leftOffset];
@@ -583,6 +602,7 @@ export class CrowdPushSystem {
     playerVelocityZ: number,
     index: number,
   ): void {
+    if (this.removedFlags[index] !== 0) return;
     const positionOffset = index * 3;
     let dx = this.positions[positionOffset] - player.x;
     let dz = this.positions[positionOffset + 2] - player.z;
@@ -643,6 +663,10 @@ export class CrowdPushSystem {
         if (cellX < 0 || cellX >= this.gridColumns) continue;
         let index = this.gridHeads[cellZ * this.gridColumns + cellX];
         while (index >= 0) {
+          if (this.removedFlags[index] !== 0) {
+            index = this.gridNext[index];
+            continue;
+          }
           const offset = index * 3;
           let dx = this.positions[offset] - player.x;
           let dz = this.positions[offset + 2] - player.z;
@@ -677,6 +701,11 @@ export class CrowdPushSystem {
 
   private limitNpcVelocity(index: number): void {
     const offset = index * 2;
+    if (this.removedFlags[index] !== 0) {
+      this.velocitiesXZ[offset] = 0;
+      this.velocitiesXZ[offset + 1] = 0;
+      return;
+    }
     const velocityX = this.velocitiesXZ[offset];
     const velocityZ = this.velocitiesXZ[offset + 1];
     const speed = Math.hypot(velocityX, velocityZ);

@@ -9,7 +9,9 @@ import {
 import { createCityWorld, type Aabb2 } from '../src/assets/CityWorld';
 import { CollisionSystem } from '../src/systems/CollisionSystem';
 import { CrowdPushSystem } from '../src/systems/CrowdPushSystem';
+import { LocalizedCrowdPushSystem } from '../src/systems/LocalizedCrowdPushSystem';
 import { findCrowdHit, findCrowdHitDistance } from '../src/systems/CrowdPicker';
+import { CrowdSpatialIndex } from '../src/systems/CrowdSpatialIndex';
 
 const SEED = 7_331;
 const INTERACTION_RANGE = 10.5;
@@ -470,6 +472,63 @@ function verifyCrowdPushSystem(): Record<string, unknown> {
     blockerDiagnostics,
   };
 
+  const verifyRemoval = (mode: 'dense' | 'localized') => {
+    const positions = makePushPositions([[0, 0]]);
+    const removedFlags = new Uint8Array(1);
+    const spatialIndex = new CrowdSpatialIndex({
+      positions,
+      bounds: openBounds,
+      cellSize: 1,
+      maximumDisplacement: 0.75,
+    });
+    const system = mode === 'localized'
+      ? new LocalizedCrowdPushSystem({
+          positions,
+          removedFlags,
+          bounds: openBounds,
+          blockers: [],
+          defaultRadius: npcRadius,
+          spatialIndex,
+        })
+      : new CrowdPushSystem({
+          positions,
+          removedFlags,
+          bounds: openBounds,
+          blockers: [],
+          defaultRadius: npcRadius,
+        });
+    const blockedBeforeRemoval = !system.canOccupyPlayer({ x: 0, z: 0 }, playerRadius);
+    removedFlags[0] = 1;
+    const clearAfterRemoval = system.canOccupyPlayer({ x: 0, z: 0 }, playerRadius);
+    const crossingPlayer = { x: 1, z: 0 };
+    const crossingResult = { ...system.step(
+      1 / 60,
+      crossingPlayer,
+      { x: -1, z: 0 },
+      { x: 2, z: 0 },
+      playerRadius,
+    ) };
+    removedFlags[0] = 0;
+    const blockedAfterRestore = !system.canOccupyPlayer({ x: 0, z: 0 }, playerRadius);
+    return {
+      pass:
+        blockedBeforeRemoval &&
+        clearAfterRemoval &&
+        crossingResult.playerContacts === 0 &&
+        crossingPlayer.x >= 0.99 &&
+        blockedAfterRestore,
+      blockedBeforeRemoval,
+      clearAfterRemoval,
+      contactsAfterRemoval: crossingResult.playerContacts,
+      crossingPlayerX: crossingPlayer.x,
+      blockedAfterRestore,
+    };
+  };
+  const removal = {
+    dense: verifyRemoval('dense'),
+    localized: verifyRemoval('localized'),
+  };
+
   const diagnostics = [
     chainDiagnostics,
     resetDiagnostics,
@@ -488,12 +547,15 @@ function verifyCrowdPushSystem(): Record<string, unknown> {
       chainPush.pass &&
       reset.pass &&
       worldConstraints.pass &&
+      removal.dense.pass &&
+      removal.localized.pass &&
       finiteDiagnostics.pass,
     frontalPush,
     noTraversal,
     chainPush,
     reset,
     worldConstraints,
+    removal,
     finiteDiagnostics,
   };
 }

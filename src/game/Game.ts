@@ -125,6 +125,7 @@ export class Game {
       ? new LocalizedCrowdPushSystem({
           positions: this.crowd.positions,
           radii: this.crowd.radii,
+          removedFlags: this.crowd.getRemovedFlags(),
           bounds: this.world.bounds,
           blockers: this.world.blockers,
           spatialIndex: this.crowd.getSpatialIndex(),
@@ -132,6 +133,7 @@ export class Game {
       : new CrowdPushSystem({
           positions: this.crowd.positions,
           radii: this.crowd.radii,
+          removedFlags: this.crowd.getRemovedFlags(),
           bounds: this.world.bounds,
           blockers: this.world.blockers,
         });
@@ -161,7 +163,8 @@ export class Game {
       start: () => this.beginSearch(false),
       findWally: () => this.findWallyForTest(),
       identifyReticle: () => this.attemptIdentification(),
-      triggerIdentify: (target = 'wally') => this.triggerIdentifyForTest(target),
+      triggerIdentify: (target = 'wally', characterIndex) =>
+        this.triggerIdentifyForTest(target, characterIndex),
       restart: () => this.restartSearch(false),
       togglePause: () => this.togglePause(false),
       setupCrowdPush: () => this.setupCrowdPushForTest(),
@@ -395,6 +398,7 @@ export class Game {
       (this.seed ^ Math.imul(this.crowdRound, 0x45d9f3b)) >>> 0,
     );
     const resetCharacters = this.crowdPush.reset();
+    this.crowd.restoreRemovedCharacters();
     if (Array.isArray(resetCharacters)) this.crowd.syncTransforms(resetCharacters);
     else this.crowd.syncTransforms();
     this.player.teleport(this.world.spawn);
@@ -410,6 +414,7 @@ export class Game {
     this.audio.setPaused(false);
     this.audio.uiConfirm();
     this.hud.updateTimer(0, 0);
+    this.hud.setCrowd(this.crowd.getRemainingCount(), this.densityLabel);
     this.hud.setState(this.state);
     this.hud.showFeedback('New crowd. New hiding spot.', 'neutral');
     if (requestPointerLock) this.requestPointerLock();
@@ -439,20 +444,22 @@ export class Game {
 
     if (target.kind === 'wally') {
       this.confirmWally();
-    } else {
-      this.registerWrongGuess();
+    } else if (target.crowdIndex !== null) {
+      this.registerWrongGuess(target.crowdIndex);
     }
   }
 
-  private registerWrongGuess(): void {
+  private registerWrongGuess(characterIndex: number): void {
     if (this.state !== 'playing') return;
+    if (!this.crowd.removeCharacter(characterIndex)) return;
+    this.aimAura.clear();
     this.wrongGuesses += 1;
     this.searchElapsed += WRONG_GUESS_PENALTY;
     this.lastHudSecond = -1;
     this.audio.wrongGuess();
     this.hud.updateTimer(this.searchElapsed, this.wrongGuesses);
+    this.hud.setCrowd(this.crowd.getRemainingCount(), this.densityLabel);
     this.hud.flashPenalty();
-    this.hud.showFeedback(`Not Wally — +${WRONG_GUESS_PENALTY} seconds`, 'wrong');
     this.publishDiagnostics();
   }
 
@@ -613,6 +620,7 @@ export class Game {
       y: this.crowd.positions[offset + 1],
       z: this.crowd.positions[offset + 2],
       radius: this.crowd.radii[safeIndex],
+      removed: this.crowd.isCharacterRemoved(safeIndex),
     };
   }
 
@@ -724,10 +732,21 @@ export class Game {
     this.aimAura.update(this.runtimeElapsed);
   }
 
-  private triggerIdentifyForTest(target: 'wally' | 'wrong'): void {
+  private triggerIdentifyForTest(
+    target: 'wally' | 'wrong',
+    characterIndex?: number,
+  ): void {
     if (this.state === 'ready') this.beginSearch(false);
     if (target === 'wally') this.confirmWally();
-    else this.registerWrongGuess();
+    else {
+      const aimedTarget = this.resolveIdentificationTarget(this.readIdentificationHits());
+      const requestedIndex = Number.isInteger(characterIndex)
+        ? characterIndex as number
+        : aimedTarget.kind === 'crowd'
+          ? aimedTarget.crowdIndex
+          : null;
+      if (requestedIndex !== null) this.registerWrongGuess(requestedIndex);
+    }
   }
 
   private requestPointerLock(): void {
@@ -757,6 +776,8 @@ export class Game {
         wrongGuesses: this.wrongGuesses,
         penaltySeconds: this.wrongGuesses * WRONG_GUESS_PENALTY,
         crowdCount: this.crowd.count,
+        remainingCrowdCount: this.crowd.getRemainingCount(),
+        removedCrowdCount: this.crowd.count - this.crowd.getRemainingCount(),
         requestedCrowdCount: this.crowdCount,
         densityLabel: this.densityLabel,
         seed: this.seed,

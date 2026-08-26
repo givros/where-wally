@@ -11,6 +11,11 @@ try {
   const bundle = await rolldown({
     input: path.resolve('scripts/benchmark-crowd.ts'),
     platform: 'node',
+    transform: {
+      define: {
+        'import.meta.env.BASE_URL': JSON.stringify('/'),
+      },
+    },
   });
   await bundle.write({ file: outputFile, format: 'esm' });
   await bundle.close();
