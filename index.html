@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en" data-game-state="loading">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#d84538" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='10' fill='%23d84538'/%3E%3Cpath d='M8 15h48v11H8zm0 23h48v11H8z' fill='%23f4eedc'/%3E%3C/svg%3E"
+    />
+    <meta
+      name="description"
+      content="Search a dense crowd of one million low-poly CharacterBase people and identify Wally."
+    />
+    <title>Found Wally — Crowd Search</title>
+  </head>
+  <body>
+    <main id="app">
+      <canvas
+        id="game-canvas"
+        tabindex="0"
+        aria-label="First-person crowd search game"
+      ></canvas>
+
+      <div id="screen-vignette" aria-hidden="true"></div>
+
+      <section id="hud" aria-label="Search status">
+        <div id="objective-cluster">
+          <span class="hud-kicker">Objective 01</span>
+          <strong>Find Wally</strong>
+          <span class="objective-clue">Red-white shirt · blue trousers</span>
+        </div>
+
+        <div id="timer-cluster" aria-label="Elapsed search time">
+          <span>Search time</span>
+          <strong id="timer-value">00:00</strong>
+          <small id="penalty-value">No penalties</small>
+        </div>
+
+        <div id="crowd-cluster">
+          <span id="density-value">Unique striped outfits</span>
+          <strong id="crowd-value">1,000,000</strong>
+          <small>people in the search zone</small>
+        </div>
+
+        <aside id="target-dossier" aria-label="Investigation photo of Wally">
+          <span class="dossier-tab">Target file · 01</span>
+          <figure class="dossier-photo">
+            <img
+              src="%BASE_URL%assets/ui/wally-investigation.png"
+              alt="Wally wearing a red and white striped shirt with blue trousers"
+              draggable="false"
+            />
+            <figcaption>Last known appearance</figcaption>
+          </figure>
+          <div class="dossier-copy">
+            <span>Find this person</span>
+            <strong>Wally</strong>
+            <small>Striped shirt · blue trousers</small>
+          </div>
+          <span class="dossier-stamp" aria-hidden="true">Target</span>
+        </aside>
+
+        <div id="hud-actions">
+          <button id="mute-button" class="icon-button" type="button" aria-label="Mute sound" title="Mute (M)">
+            <span id="mute-icon" aria-hidden="true">◖))</span>
+          </button>
+          <button id="pause-button" class="icon-button" type="button" aria-label="Pause game" title="Pause (P)">
+            <span aria-hidden="true">Ⅱ</span>
+          </button>
+        </div>
+
+        <div id="crosshair" aria-hidden="true">
+          <i></i><i></i><i></i><i></i>
+        </div>
+
+        <div id="interaction-prompt">
+          <kbd>E</kbd>
+          <span>or click to identify</span>
+        </div>
+
+        <div id="feedback-banner" role="status" aria-live="polite"></div>
+
+        <div id="control-strip" aria-hidden="true">
+          <span><kbd>WASD</kbd> Move</span>
+          <span><kbd>Mouse</kbd> Look</span>
+          <span><kbd>Shift</kbd> Sprint</span>
+          <span><kbd>P</kbd> Pause</span>
+          <span><kbd>M</kbd> Sound</span>
+        </div>
+
+        <section id="mobile-controls" aria-label="Touch controls">
+          <div id="move-stick" role="group" aria-label="Move character">
+            <span class="move-stick-label" aria-hidden="true">Move</span>
+            <span id="move-knob" aria-hidden="true"></span>
+          </div>
+          <button id="identify-touch" type="button" aria-label="Identify the highlighted person">
+            Identify
+          </button>
+        </section>
+      </section>
+
+      <section id="start-overlay" class="game-overlay" aria-labelledby="start-title">
+        <div class="overlay-poster start-poster">
+          <div class="poster-stripe" aria-hidden="true"></div>
+          <h1 id="start-title"><span>Find</span> Wally.</h1>
+          <div id="loading-status" class="loading-status" aria-live="polite">
+            <span class="loading-pulse" aria-hidden="true"></span>
+            <span id="loading-copy">Loading…</span>
+          </div>
+          <button id="start-button" class="primary-action" type="button" disabled>
+            <span>Enter the crowd</span>
+            <span aria-hidden="true">→</span>
+          </button>
+        </div>
+      </section>
+
+      <section id="pause-overlay" class="game-overlay is-hidden" aria-labelledby="pause-title">
+        <div class="overlay-poster compact-poster">
+          <span class="edition-mark">Search suspended</span>
+          <h2 id="pause-title">Keep your place.</h2>
+          <p class="overlay-copy">The clock and the crowd are waiting exactly where you left them.</p>
+          <button id="resume-button" class="primary-action" type="button">
+            <span>Resume search</span>
+            <span aria-hidden="true">P</span>
+          </button>
+          <button id="pause-restart-button" class="secondary-action" type="button">
+            Restart with a new hiding spot
+          </button>
+        </div>
+      </section>
+
+      <section id="success-overlay" class="game-overlay is-hidden" aria-labelledby="success-title">
+        <div class="overlay-poster success-poster">
+          <div class="success-stamp" aria-hidden="true">Found!</div>
+          <span class="edition-mark">Identity confirmed</span>
+          <h2 id="success-title">You found Wally.</h2>
+          <p class="overlay-copy">Against a wall of faces, the red-and-white stripes gave him away.</p>
+          <div class="result-line">
+            <span><small>Final time</small><strong id="result-time">00:00</strong></span>
+            <span><small>Wrong guesses</small><strong id="result-wrongs">0</strong></span>
+            <span><small>Crowd</small><strong id="result-crowd">1,000,000</strong></span>
+          </div>
+          <button id="success-restart-button" class="primary-action" type="button">
+            <span>Hide Wally again</span>
+            <span aria-hidden="true">R</span>
+          </button>
+        </div>
+      </section>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

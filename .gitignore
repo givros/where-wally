@@ -1,0 +1,11 @@
+node_modules/
+dist/
+test-results/
+artifacts/
+output/
+playwright-report/
+.codex-dev-server*.log
+.env
+.env.*
+*.log
+.DS_Store
